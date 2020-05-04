@@ -1,0 +1,277 @@
+---
+title: "Trabajo Métodos Estadísticos Avanzados"
+author: "Jose David Sánchez Castrillón, Juan Camilo Henao Salazar, Victoria Álvarez Restrepo"
+date: "4/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+El siguiente informe detalla el proceso de creación de un modelo que permita caracterizar las relaciones entre algunas variables macroeconómicas y la variación anual en los costos de empresas productoras de alimentos. En total, se recolectaron datos de costos de 26 empresas para 10 años (2009-2018) y se obtuvo el cambio porcentual de esta variable, por lo tanto, se tienen registros de 9 años para correr el modelo. Esta información de costos se obtuvo de la SuperSociedades y corresponde a los reportes anuales de estados financieros que realizan estas empresas. 
+
+La recoleción de datos también implicó consultas de información en el DANE y el Banco de la República, para obtener cifras macroeconómicas del PIB, la TRM, la inflación, la balanza comercial y fiscal, las importaciones del sector de producción de alimentos, etc.
+
+Muchas de las variables macroeconómicas presentan reportes periodicos en un mismo año, por lo tanto, se requirió realizar anualización a través de promedios. Por ejemplo, la TRM es el resultado diario de la interacción del mercado de divisas, específicamente del dólar americano, por lo tanto, se realizó el promedio de la serie diaria para tener información anual, sin embargo, como es evidente que se pierde mucha información, se decidió incluir el valor máximo y mínimo anual dentro de la base de datos para tener una idea de cuan dispersos se encuentran los datos en la serie diaria y poder seleccionar la TRM con mayor impacto en la variación de costos.
+
+Todo el pre-procesamiento de los datos que incluye la descarga, los promedios por cada variable y la concatenación se realizaron en excel y tomó cerca del 15% del tiempo dedicado al trabajo, esto debido a que se empleó la información disponible en páginas gubernamentales.
+
+La consolidación de este informe requirió otro 15% del tiempo destinado al trabajo.
+```{r}
+library(readxl)
+datos <- read_excel("DatosAlimentos.xlsx")
+datos<-datos[c(-30)]
+```
+ANALISIS DESCRIPTIVO
+A continuación se presenta el análisis descriptivo de los datos el cual tomó menos del 10% del tiempo destinado al trabajo.
+
+Comportamiento de los costos de cada empresa en el tiempo.
+
+La siguiente gráfica presenta la variación de los costos de cada empresa durante el periodo de referencia. Se evidencian comportamientos aparentemente ciclicos que varían entre cada empresa, esto da indicios de la necesidad de emplear modelos de efectos mixtos para explicar las diferencias entre cada individuo. 
+
+También se evidencia que el comportamiento no es lineal en ningún caso, esto indica que se deben incluir transformaciones en las variables independientes para lograr capturar su efecto en la variación de los costos.
+```{r}
+library(ggplot2)
+
+ggplot(data = datos, aes(x = Periodo, y = Variacion_Costos, color = NIT)) +
+  geom_point() +
+  theme_bw() +
+  facet_wrap(~ NIT) + 
+  theme(legend.position = "none")
+```
+El diagrama de cajas y bigotes confirma que la variacion promedio de los costos en el tiempo sigue un comportamiento ciclico. En algunos años se evidencian outliers que posteriormente serán identificados con más detalle. Graficamente no se puede confirmar una distribución normal en los datos.
+```{r}
+boxplot(Variacion_Costos~Periodo,data=datos)
+```
+Dentro de la actividad "Producción de Alimentos" que se encuentra en la clasificación de Industria Manufacturera según la clasificación CIIU, se lograron identificar empresas de 10 subsectores: Elaboración de productos de panadería, molinería, lácteos, aceites de origen vegetal-animal, procesamiento y conservas de carnes, frutas y verduras, elaboración y refinación de azúcar, de alimentos preparados para animales, trilla de café y otros productos alimenticios no clasificados. Estos subsectores son muy diversos. La siguiente gráfica presenta la variación de costos por empresa diferenciada por su respectivo subsector. Se descarta que exista una diferenciación importante de la variación de los costos y el subsector.
+
+```{r}
+interaction.plot(datos$Periodo, datos$NIT, datos$Variacion_Costos, xlab="año", ylab="variación", col=datos$N_SUBSECTOR, legend=F)
+```
+
+
+De igual manera, se extrajo información sobre el tamaño de la empresa a partir de los activos reportados en el balance general de cada año. En este dataset predominan las empresas medianas y grandes. La gráfica muestra que tampoco se puede identificar una diferenciación en la variación de los costos de acuerdo al tamaño de la empresa.
+```{r}
+ggplot(data = datos, aes(x = Periodo, y = Variacion_Costos, color=TIPO_EMPRESA)) +
+  geom_point() +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+La siguiente gráfica evidencia un comportamiento particular de la variación de costos de cada empresa en el tiempo, esto quiere decir que existen diferencias en intercepto y pendiente de cada una, rectificando que es pertinente emplear un modelo de efectos mixtos donde se puedan obtener efectos aleatorios que expliquen el comportamiento de cada empresa
+```{r}
+library(lme4)
+require(lattice)
+xyplot(Variacion_Costos~Periodo|NIT, datos, type=c("g", "p", "r"),
+       xlab="periodo",
+       ylab="variacion de costo de ventas anual", aspect="xy",
+       layout = c(6,2))
+```
+
+SELECCIÓN Y TRANSFORMACIÓN DE VARIABLES
+
+Para realizar pruebas, se recolectó información de muchas variables macroeconómicas y diferentes variantes de la misma, por ejemplo, se tienen datos del PIB a diciembre de cada año, el PIB promedio de cada año, la variación anual del PIB (es decir, comparación diciembre-diciembre) y la variación año corrido (comparación enero-diciembre del mismo año).
+
+La selección de variables se realizó a partir de la correlación que presentan las variables potencialmente explicativas y la variación de los costos. Este proceso se realizó con transformaciones de cada variable empleando la función poly(), la cual genera transformaciones ortogonales de cada variable elevada a una potencia indicada. 
+
+Cada variable fue elevada a la 4, dejando como resultado 4 nuevas variables por cada variable existente: PIB, PIB^2, PIB^3 y PIB^4. 
+
+Este proceso tomó cerca del 20% del tiempo destinado a realizar el trabajo, ya que se buscaba una estrategia adecuada para elegir las variables (y las transformaciones) que se debían tener en cuenta en el modelo.
+
+Con cada una de las transformaciones, se generó la correlación de Variación de costos y los resultados son los siguientes:
+```{r}
+for (i in names(datos[c(-1, -28, -29, -30)])){
+  eje = c()
+  for (k in 1:234){
+    eje[k] = as.numeric(datos[k,c(i)])
+  }
+  print(i)
+  print(cor(x=poly(eje, 4), y=datos$Variacion_Costos, method = "pearson"))
+  print(cor(x=log(eje), y=datos$Variacion_Costos, method = "pearson"))
+  
+  }
+```
+
+Con las variables ( o transformaciones de variables) que presentan mayor correlación con la dependiente se calcula el factor de la inflación de la varianza, que es una aproximación a la dependencia de una variable explicativa con las demás. Emplear el VIF como criterio para seleccionar ayuda a prevenir problemas de multicolinealidad en el modelo. Un VIF superior a 10, sugiere que la variable explicativa debe ser eliminada porque ya existen otras variables en el modelo que están explicando su comportamiento. A partir de prueba y ensayo se seleccionan las variables con este método. Se inicia tomando las 7 primeras variables en el "ranking de correlaciones" (BALANCE_FISCAL^3, VAR_BALANZA_FISCAL, INFLACION_PROM, TRM_PROMEDIO^4, VAR_TRM_PROM, PIB_PROMEDIO^4, BALANZA_CCIAL^2) y por "intuición" se empiezan a descartar variables hasta obtener la combinación que presenta bajos VIF y que puede presentar mayor ajuste según el criterio de los autores.
+```{r}
+vars = names(datos)
+vars_sel = vars[vars %in% c("BALANCE_FISCAL", "INFLACION_PROM", "BALANZA_CCIAL", "TASA_PROM_BANREP")]
+print(vars_sel)
+vifs = vector()
+for(i in 1:length(vars_sel)){
+  formula = paste(paste(vars_sel[i],' ~ ', sep=''), paste(vars_sel[-i], collapse='+',sep=''), sep='')
+  formula = as.formula(formula)
+  model = lm(formula, data=datos)
+  r_2 = summary(model)$r.squared
+  vifs[i] = 1.0/(1.0-r_2)
+print(vifs[i])
+}
+```
+```{r}
+fix(datos)
+```
+Las siguientes gráficas presentan la variación de los costos vs. Cada variable explicativa, se adiciona una regresión lineal por empresa en cada caso para verificar los efectos de la x que se pueden encontrar por cada sujeto. Las gráficas permiten identificar, antes de ejecutar el modelo de efectos mixtos, que es muy posible encontrar problemas para ajustar el modelo a datos raros en la variación de los costos, es decir, datos superiores al 25% y variaciones negativas.
+```{r}
+for (i in vars_sel){
+  formula <- paste("Variacion_Costos~factor(NIT)*", i)
+  m<-lm(formula, data=datos)
+  plot(datos[,i], datos$Variacion_Costos, xlab=i, ylab='Variacion Costos')
+  for (k in datos$NIT) {
+    J <- datos$NIT == k
+    x1 <- c(datos[J, c(i)])
+    y1 <- m$fitted[J]
+    Ord <- order(x1)
+    lines(x1[Ord], y1[Ord])
+}
+}
+```
+
+```{r}
+'%ni%' = Negate('%in%')
+```
+Se ejecutará el modelo con la matriz de datos normalizada. Se divide esta matriz en dos: 8 años para correr el modelo (2010-2017) y el 2018 para evaluar el ajuste.
+```{r}
+library(dplR)
+library(sirt)
+# se normalizan los datos
+datos_norm<-scale(datos[c(-1)], center = TRUE, scale = TRUE)
+#se rescatan NIT y Año
+nits = datos[c(1)]
+periodo2 = datos[c(2)]
+#Se convierte en df la serie de datos normalizados
+datos_n = data.frame(datos_norm)
+#Se adicionan las columnas de NIT y Año al df anterior
+datos_n["NIT"] = nits 
+datos_n["Periodo_2"] = periodo2
+#Se extraen datos de entrenamiento(tr) y prueba (pr)
+datos_tr_n<- subset(datos_n, Periodo_2 != 2018)
+datos_pr_n<- subset(datos_n, Periodo_2 == 2018)
+datos_tr<-subset(datos, Periodo != 2018)
+datos_pr<-subset(datos, Periodo == 2018)
+```
+MODELO
+```{r}
+library(stats)
+library(lme4)
+```
+```{r}
+vars_sel
+```
+Se emplea la libreria lme4 para ejecutar un modelo de efectos mixtos con la función lmer. El modelo incluye dos efectos aleatorios: la balanza comercial y la tasa de intermediación del Banco de la República. La primera tiene sentido cuando se contempla que cada empresa puede depender en mayor o menor medida de la importación de materias primas, la balanza comercial tiene un alto impacto en el precio del dólar que puede encarecer o reducir el precio de materias primas compradas en el exterior. De igual manera, el efecto de la tasa de intermediación puede cambiar cuando las empresas tienen un mayor endeudamiento que cuando se financian con recursos propios, por lo tanto, se puede considerar un efecto aleatorio.
+
+Los efectos fijos que explican variaciones en toda la población son la inflación y el balance fiscal. 
+
+El ajuste del modelo tomó mucho tiempo (cerca del 40% del tiempo empleado en ejecutar el trabajo), debido a que no se tenía mucho conocimiento sobre el modelo y se realizaron varios ensayos para obtener efectos aleatorios con alta varianza y variables significativas para explicar los efectos fijos.
+
+```{r}
+formula = Variacion_Costos ~ -1 + INFLACION_PROM + (poly(BALANCE_FISCAL,2)) + (-1+poly(BALANZA_CCIAL,2) + poly(TASA_PROM_BANREP,3) |NIT)
+formula = as.formula(formula)
+modelo1 = lmer(formula, data = datos_tr_n)
+summary(modelo1)
+```
+
+ELIMINACIÓN DE OUTLIERS
+A partir de la distancia de Cook se calculan aquellos registros que tienen alta influencia en los resultados del modelo. En este caso, se eliminarán las empresas que al menos tengan un registro cuya distancia de Cook supere 0.8 (siendo 1 un registro muy influyente). Se deciden eliminar todos los registros de la empresa para mantener en balance en los datos.
+```{r}
+library(car)
+distancia <- cooks.distance(modelo1)
+indices <- distancia>=0.8
+print(datos_n[indices,])
+plot(distancia)
+```
+
+EL siguiente paso siguiente es generar datos nuevos para correr nuevamente el modelo sin las empresas con registros "influyentes".
+```{r}
+datos_finales <-subset(datos, NIT %ni% c(890928577, 800020220))
+datos_norm_fin<-scale(datos_finales[c(-1)], center = TRUE, scale = TRUE)
+nits = datos_finales[c(1)]
+periodo2 = datos_finales[c(2)]
+datos_n_f = data.frame(datos_norm_fin)
+datos_n_f["NIT"] = nits 
+datos_n_f["Periodo_2"] = periodo2
+datos_tr_nfin<- subset(datos_n_f, Periodo_2 != 2018)
+datos_pr_nfin<- subset(datos_n_f, Periodo_2 == 2018)
+datos_tr<-subset(datos_finales, Periodo != 2018)
+datos_pr<-subset(datos_finales, Periodo == 2018)
+```
+Se ejecuta nuevamente el modelo con datos sin outliers, ya no se presentan problemas 
+```{r}
+modelo1 = lmer(formula, data = datos_tr_nfin)
+summary(modelo1)
+```
+Los residuos del modelo se encuentran dispersos entorno a la media y no presentan un patrón importante con el y predicho. No obstante, no es posible verificar si son normales ya que el qqplot evidencia distorsiones especialmente en los datos extremos (muy pequeños o muy grandes)
+```{r}
+Res <- resid(modelo1)
+Fit <- predict(modelo1)
+par(mfrow = c(2, 2))
+plot(modelo1)
+hist(Res, main = "Histogram of residuals", xlab = "Residuals")
+qqnorm(Res)
+qqline(Res)
+plot(Res ~ datos_tr_nfin$INFLACION_PROM, ylab = "Residuals", main = "Inflacion")
+abline(h = 0, lty = 3)
+plot(Res ~ datos_tr_nfin$BALANCE_FISCAL, ylab = "Residuals", main = "1er transformacion Bal. Fiscal")
+abline(h = 0, lty = 3)
+```
+
+```{r}
+rsq <- function (x, y) cor(x, y, method="spearman") ^ 2
+```
+Para evaluar el modelo se decidió crear una función que calcula el R2 tomando como referencia cada empresa, para evitar pérdidas de información en este indicador. Esta función promedia el R2 obtenido por cada empresa, además usa una correlación más robusta que en este caso es la de spearman. Se quiso construir esta nueva versión del R2 por que si se mide como se hace tradicionalmente se omiten los efectos que puedan tener cada empresa por separado y se estaría perdiendo información, por otro lado si se promedian las correlaciones de las diferentes empresas podríamos entrar en errores asociados a la paradoja de simpson, por eso se propone este nuevo método que tiene en cuenta cada empresa por aparte, calcula su R2 y luego los promedia.
+```{r}
+rsq_ind = function(model, data, target, cond){
+  uniques = unique(data[cond])
+  r2s = vector()
+  for(i in 1:nrow(uniques)){
+    data_i = data[data[cond] == as.numeric(uniques[i, cond]),]
+    preds = predict(model, newdata = as.data.frame(data_i))
+    results = data[data[cond] == as.numeric(uniques[i, cond]), target]
+    r2 = rsq(preds, results)
+    r2s[i] = r2
+  }
+  return(mean(r2s))
+}
+```
+El resultado indica que el modelo logra en promedio una correlación de 0.49 de los valores predichos con los valores reales, la cual es una correlación considerable.
+```{r}
+r2_tr = rsq_ind(modelo1, datos_tr_nfin, "Variacion_Costos", "NIT")
+print("R2 promedio por cada empresa para datos de entrenamiento")
+print(r2_tr)
+```
+También se toma el RMSE como una referencia de ajuste del modelo. En este caso, el error promedio al predecir la variación de los costos es de 0.7 con los datos de entrenamiento, que al compararse con la varianza de estos, es baja.
+```{r}
+RMSE = function(p,r) sqrt(mean((r-p)^2))
+print("RMSE con datos de entrenamiento")
+RMSE(predict(modelo1), datos_tr_nfin$Variacion_Costos) 
+print("Varianza de la variación en los costos")
+print(var(datos_tr_n$Variacion_Costos))
+```
+Finalmente, se realiza validación cruzada para verificar que el modelo no presenta grandes diferencias de ajuste al ser entrenado y probado con datos diferentes. En promedio, se evidencia un error de 1.49 con los datos de prueba de los diferentes folds al predecir la variación de costos, este valor supera la desviación estándar de los datos de entrenamiento y puede indicar que tenemos problemas de sobreajuste.
+```{r}
+performances <-c()
+k<-c(2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018)
+for (i in 1:length(k)){
+  training_set <-subset(datos_n, Periodo_2 != k[i])
+  testing_set <-subset(datos_n, Periodo_2 ==  k[i])
+  model<- lmer(formula, data = training_set)
+
+  predicted <-predict(model, testing_set)
+  RMSE1 <-RMSE(predicted, testing_set$Variacion_Costos)
+  performances[i]<-RMSE1
+
+  }
+  print(c('RMSE1'=mean(performances)))
+```
+
+El RMSE obtenido al evaluar el modelo con los datos de prueba (año 2018) es de 1.06, un poco mayor a la varianza de la variable dependiente en los datos de entrenamiento.
+```{r}
+preds <- predict(modelo1, newdata=datos_pr_nfin)
+print("RMSE en datos de prueba")
+RMSE(preds, datos_pr_nfin$Variacion_Costos)
+```
+Finalmente, al graficar el valor predicho con los datos de prueba vs. el valor real de la variación en los costos (solo para el año 2018) se observa que las predicciones pueden presentar un mejor ajuste y el modelo requiere incluir otras variables para generar mejores predicciones. No obstante, el modelo no presenta predicciones excesivamente alejadas de la realidad y el rango en que se mueven es muy similar a las variaciones reales.
+```{r}
+modelo1 = lmer(formula, data = datos_tr_nfin)
+plot(predict(modelo1, newdata=datos_n_f), datos_n_f$Variacion_Costos, ylab = "Real Costo", xlab = "Costo predicho")
+```
+
